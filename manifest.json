@@ -1,0 +1,31 @@
+{
+    "manifest_version": 3,
+    "name": "Service Freeze Merge Guard",
+    "version": "1.1.0",
+    "description": "Disables merge button in Bitbucket PRs when service is frozen",
+    "permissions": [
+        "storage",
+        "scripting"
+    ],
+    "host_permissions": [
+        "https://bitbucket.org/*",
+        "https://noxhsxrk.com/*"
+    ],
+    "content_scripts": [
+        {
+            "matches": [
+                "https://bitbucket.org/*/pull-requests/*"
+            ],
+            "js": [
+                "content.js"
+            ]
+        }
+    ],
+    "options_page": "options.html",
+    "background": {
+        "service_worker": "background.js"
+    },
+    "icons": {
+        "128": "icons/icon128.png"
+    }
+}

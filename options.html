@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Service Freeze Settings</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        padding: 20px;
+      }
+      input, button {
+        font-size: 14px;
+        padding: 8px;
+        margin-top: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>Service Freeze Settings</h2>
+    <label for="org">Bitbucket Organization Name:</label><br>
+    <input type="text" id="org" placeholder="e.g. poramestcorp" /><br>
+    
+    <label for="apiKey">API Key (x-api-key):</label><br>
+    <input type="password" id="apiKey" placeholder="Enter your API key" /><br>
+    
+    <button id="save">Save</button>
+    <p id="status" style="color: green;"></p>
+
+    <script src="options.js"></script>
+  </body>
+</html>
