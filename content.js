@@ -1,25 +1,14 @@
 (async () => {
-  console.log("[Service Freeze] Content script loaded");
-
   const { organization, apiKey } = await chrome.storage.sync.get([
     "organization",
     "apiKey",
   ]);
 
-  console.log("[Service Freeze] Settings:", {
-    organization,
-    hasApiKey: !!apiKey,
-  });
-
   if (!organization) {
-    console.warn(
-      "Organization not set. Please configure in extension options."
-    );
     return;
   }
 
   if (!apiKey) {
-    console.warn("API Key not set. Please configure in extension options.");
     return;
   }
 
@@ -27,18 +16,13 @@
   const match = window.location.href.match(regex);
   const serviceName = match ? match[1] : null;
 
-  console.log("[Service Freeze] URL:", window.location.href);
-  console.log("[Service Freeze] Service name:", serviceName);
-
   if (!serviceName) {
-    console.log("[Service Freeze] No service name found, exiting");
     return;
   }
 
   let isFrozen = false;
 
   try {
-    console.log("[Service Freeze] Sending message to background script...");
 
     const response = await chrome.runtime.sendMessage({
       action: "checkServiceFreeze",
@@ -46,35 +30,35 @@
       apiKey: apiKey,
     });
 
-    console.log("[Service Freeze] Response from background:", response);
-
     if (response.error) {
-      console.error("❌ Error fetching service freeze status:", response.error);
-
-      // Show notification to user
-      if (response.error.includes("403")) {
-        alert("⚠️ Service Freeze Extension Error:\n\n" + response.error);
-      }
       return;
     }
 
     isFrozen = response.isFrozen;
-    console.log("[Service Freeze] Is frozen:", isFrozen);
   } catch (err) {
-    console.error("Error communicating with background script:", err);
     return;
   }
 
   if (!isFrozen) {
-    console.log("[Service Freeze] Service not frozen, exiting");
     return;
   }
 
-  console.log(
-    "[Service Freeze] Service is frozen! Looking for merge button..."
-  );
+  let bypassChecked = false;
 
   const observer = new MutationObserver(() => {
+    if (!bypassChecked) {
+      const prTitle = getPRTitle();
+      
+      if (prTitle && prTitle.includes('changelog')) {
+        observer.disconnect();
+        return;
+      }
+      
+      if (prTitle) {
+        bypassChecked = true;
+      }
+    }
+
     const mergeButton =
       document.querySelector('[data-testid="mergeButton-primary"]') ||
       [...document.querySelectorAll("button")].find((btn) =>
@@ -87,6 +71,32 @@
   });
 
   observer.observe(document.body, { childList: true, subtree: true });
+
+  function getPRTitle() {
+    const selectors = [
+      'h1',
+      '[data-testid="pull-request-title"]',
+      '[data-qa="pr-header-title"]',
+      'h1[class*="title"]',
+      'div[class*="pull-request"] h1',
+      'article h1',
+      '.pull-request-title'
+    ];
+
+    for (const selector of selectors) {
+      const element = document.querySelector(selector);
+      if (element && element.textContent.trim()) {
+        return element.textContent.toLowerCase().trim();
+      }
+    }
+
+    const pageTitle = document.title.toLowerCase();
+    if (pageTitle && !pageTitle.includes('bitbucket')) {
+      return pageTitle;
+    }
+
+    return '';
+  }
 
   function disableMergeButton(btn) {
     btn.disabled = true;
