@@ -7,9 +7,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   if (request.action === "checkServiceFreeze") {
     checkServiceFreeze(request.serviceName, request.apiKey)
-      .then((isFrozen) => {
-        console.log("[Service Freeze BG] Sending response:", { isFrozen });
-        sendResponse({ isFrozen });
+      .then((result) => {
+        console.log("[Service Freeze BG] Sending response:", result);
+        sendResponse(result);
       })
       .catch((error) => {
         console.error("[Service Freeze BG] Error:", error);
@@ -51,10 +51,20 @@ async function checkServiceFreeze(serviceName, apiKey) {
     const service = data.services.find((s) => s.service_name === serviceName);
     console.log("[Service Freeze BG] Found service:", service);
 
-    const isFrozen = !!(service && service.status === true);
+    if (!service) {
+      return {
+        isFrozen: false,
+        serviceData: null
+      };
+    }
+
+    const isFrozen = service.status === true;
     console.log("[Service Freeze BG] Is frozen:", isFrozen);
 
-    return isFrozen;
+    return {
+      isFrozen,
+      serviceData: service
+    };
   } catch (err) {
     console.error(
       "[Service Freeze BG] Error fetching service freeze status:",
