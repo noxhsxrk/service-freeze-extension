@@ -1,6 +1,10 @@
 (async () => {
   console.log("[Service Freeze] Content script loaded");
   
+  let currentUrl = window.location.href;
+  let checkInterval = null;
+  let mergeButtonObserver = null;
+  
   const { organization, apiKey } = await chrome.storage.sync.get([
     "organization",
     "apiKey",
@@ -11,115 +15,151 @@
     hasApiKey: !!apiKey,
   });
 
-  if (!organization) {
-    console.warn("[Service Freeze] Organization not set");
+  if (!organization || !apiKey) {
+    console.warn("[Service Freeze] Organization or API Key not set");
     return;
   }
 
-  if (!apiKey) {
-    console.warn("[Service Freeze] API Key not set");
-    return;
-  }
-
-  const regex = new RegExp(`bitbucket\\.org\\/${organization}\\/([^/]+)`);
-  const match = window.location.href.match(regex);
-  const serviceName = match ? match[1] : null;
-
-  console.log("[Service Freeze] URL:", window.location.href);
-  console.log("[Service Freeze] Service name:", serviceName);
-
-  if (!serviceName) {
-    console.log("[Service Freeze] No service name found");
-    return;
-  }
-
-  let isFrozen = false;
-  let serviceData = null;
-
-  try {
-    console.log("[Service Freeze] Sending message to background...");
+  async function checkAndApplyFreeze() {
+    const url = window.location.href;
     
-    const response = await chrome.runtime.sendMessage({
-      action: "checkServiceFreeze",
-      serviceName: serviceName,
-      apiKey: apiKey,
-    });
-
-    console.log("[Service Freeze] Response:", response);
-
-    if (response.error) {
-      console.error("[Service Freeze] Error:", response.error);
+    const regex = new RegExp(`bitbucket\\.org\\/${organization}\\/([^/]+)\\/pull-requests\\/(\\d+)`);
+    const match = url.match(regex);
+    
+    if (!match) {
+      console.log("[Service Freeze] Not on a PR page");
+      cleanup();
       return;
     }
 
-    isFrozen = response.isFrozen;
-    serviceData = response.serviceData;
+    const serviceName = match[1];
+    const prNumber = match[2];
     
-    console.log("[Service Freeze] Is frozen:", isFrozen);
-    console.log("[Service Freeze] Service data:", serviceData);
-  } catch (err) {
-    console.error("[Service Freeze] Exception:", err);
-    return;
-  }
+    console.log("[Service Freeze] Checking PR:", { serviceName, prNumber, url });
 
-  if (!isFrozen) {
-    console.log("[Service Freeze] Service not frozen, exiting");
-    return;
-  }
+    try {
+      const response = await chrome.runtime.sendMessage({
+        action: "checkServiceFreeze",
+        serviceName: serviceName,
+        apiKey: apiKey,
+      });
 
-  console.log("[Service Freeze] Service is frozen! Starting observer...");
+      console.log("[Service Freeze] Response:", response);
 
-  let bypassChecked = false;
-
-  const observer = new MutationObserver(() => {
-    if (!bypassChecked) {
-      const prTitle = getPRTitle();
-      console.log("[Service Freeze] PR Title:", prTitle);
-      
-      // Check if PR title contains "changelog"
-      if (prTitle && prTitle.includes('changelog')) {
-        console.log("[Service Freeze] Bypassing - PR title contains 'changelog'");
-        observer.disconnect();
+      if (response.error) {
+        console.error("[Service Freeze] Error:", response.error);
+        cleanup();
         return;
       }
 
-      // Check if current URL matches changelog_url from API
-      if (serviceData && serviceData.changelog_url) {
-        const currentUrl = window.location.href.toLowerCase().trim();
-        const changelogUrl = serviceData.changelog_url.toLowerCase().trim();
+      const { isFrozen, serviceData } = response;
+      
+      console.log("[Service Freeze] Is frozen:", isFrozen);
+
+      if (!isFrozen) {
+        console.log("[Service Freeze] Service not frozen");
+        cleanup();
+        return;
+      }
+
+      console.log("[Service Freeze] Service is frozen! Applying freeze logic...");
+      applyFreezeLogic(serviceData);
+      
+    } catch (err) {
+      console.error("[Service Freeze] Exception:", err);
+      cleanup();
+    }
+  }
+
+  function applyFreezeLogic(serviceData) {
+    if (mergeButtonObserver) {
+      mergeButtonObserver.disconnect();
+    }
+
+    let bypassChecked = false;
+    let buttonDisabled = false;
+
+    mergeButtonObserver = new MutationObserver(() => {
+      if (!bypassChecked) {
+        const prTitle = getPRTitle();
+        console.log("[Service Freeze] PR Title:", prTitle);
         
-        console.log("[Service Freeze] Checking URL match:");
-        console.log("  Current URL:", currentUrl);
-        console.log("  Changelog URL:", changelogUrl);
-        
-        if (currentUrl === changelogUrl || currentUrl.startsWith(changelogUrl)) {
-          console.log("[Service Freeze] Bypassing - URL matches changelog_url");
-          observer.disconnect();
+        if (prTitle && prTitle.includes('changelog')) {
+          console.log("[Service Freeze] Bypassing - PR title contains 'changelog'");
+          cleanup();
           return;
         }
-      }
-      
-      if (prTitle) {
-        bypassChecked = true;
-        console.log("[Service Freeze] Bypass check completed, will now look for merge button");
-      }
-    }
 
-    const mergeButton =
-      document.querySelector('[data-testid="mergeButton-primary"]') ||
-      [...document.querySelectorAll("button")].find((btn) =>
-        /merge/i.test(btn.textContent)
-      );
-    
-    if (mergeButton) {
-      console.log("[Service Freeze] Merge button found! Disabling...");
-      disableMergeButton(mergeButton, serviceData);
-      showFreezeNotification(serviceData);
-      observer.disconnect();
+        if (serviceData && serviceData.changelog_url) {
+          const currentPageUrl = window.location.href.toLowerCase().trim();
+          const changelogUrl = serviceData.changelog_url.toLowerCase().trim();
+          
+          if (currentPageUrl === changelogUrl || currentPageUrl.startsWith(changelogUrl)) {
+            console.log("[Service Freeze] Bypassing - URL matches changelog_url");
+            cleanup();
+            return;
+          }
+        }
+        
+        if (prTitle) {
+          bypassChecked = true;
+        }
+      }
+
+      if (!buttonDisabled) {
+        const mergeButton =
+          document.querySelector('[data-testid="mergeButton-primary"]') ||
+          [...document.querySelectorAll("button")].find((btn) =>
+            /merge/i.test(btn.textContent)
+          );
+        
+        if (mergeButton && !mergeButton.hasAttribute('data-freeze-disabled')) {
+          console.log("[Service Freeze] Merge button found! Disabling...");
+          disableMergeButton(mergeButton, serviceData);
+          showFreezeNotification(serviceData);
+          buttonDisabled = true;
+        }
+      }
+    });
+
+    mergeButtonObserver.observe(document.body, { childList: true, subtree: true });
+  }
+
+  function cleanup() {
+    if (mergeButtonObserver) {
+      mergeButtonObserver.disconnect();
+      mergeButtonObserver = null;
     }
+    
+    const notification = document.getElementById('service-freeze-notification');
+    if (notification) {
+      notification.remove();
+    }
+  }
+
+  let lastUrl = window.location.href;
+  new MutationObserver(() => {
+    const currentPageUrl = window.location.href;
+    if (currentPageUrl !== lastUrl) {
+      console.log("[Service Freeze] URL changed:", currentPageUrl);
+      lastUrl = currentPageUrl;
+      cleanup();
+      checkAndApplyFreeze();
+    }
+  }).observe(document, { subtree: true, childList: true });
+
+  window.addEventListener('popstate', () => {
+    console.log("[Service Freeze] Popstate event");
+    cleanup();
+    setTimeout(checkAndApplyFreeze, 100);
   });
 
-  observer.observe(document.body, { childList: true, subtree: true });
+  checkInterval = setInterval(() => {
+    console.log("[Service Freeze] Periodic re-check...");
+    checkAndApplyFreeze();
+  }, 30000);
+
+  await checkAndApplyFreeze();
 
   function getPRTitle() {
     const selectors = [
@@ -148,6 +188,8 @@
   }
 
   function disableMergeButton(btn, serviceData) {
+    btn.setAttribute('data-freeze-disabled', 'true');
+    
     btn.disabled = true;
     btn.style.opacity = "0.5";
     btn.style.cursor = "not-allowed";
@@ -273,7 +315,6 @@
       content += `</div>`;
     }
 
-    // Add close button
     content += `
       <button id="close-freeze-notification" 
               style="position: absolute; 
@@ -298,7 +339,6 @@
 
     notification.innerHTML = content;
 
-    // Add animation keyframes
     const style = document.createElement('style');
     style.textContent = `
       @keyframes slideIn {
@@ -319,7 +359,6 @@
 
     document.body.appendChild(notification);
 
-    // Add close button handler
     const closeBtn = document.getElementById('close-freeze-notification');
     if (closeBtn) {
       closeBtn.addEventListener('click', () => {
